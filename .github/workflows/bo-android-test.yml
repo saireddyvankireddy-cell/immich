@@ -1,7 +1,10 @@
 
-name: Kaki Android APK (manual)
+name: Kaki Android APK
 
 on:
+  push:
+    branches:
+      - bo-immich-test
   workflow_dispatch:
 
 permissions:
@@ -11,6 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
@@ -43,7 +47,9 @@ jobs:
         run: |
           python3 - <<'KAKI_PATCH_SCRIPT'
           from pathlib import Path
-          import math, struct, zlib
+          import math
+          import struct
+          import zlib
 
           ROOT = Path('mobile')
 
@@ -52,14 +58,15 @@ jobs:
               original = f.read_text()
               if original.count(old) != 1:
                   raise SystemExit(
-                      f'Kaki patch stopped: expected one anchor in {f}, '
-                      f'found {original.count(old)}'
+                      f'Kaki patch stopped: expected one anchor '
+                      f'in {f}, found {original.count(old)}'
                   )
               f.write_text(original.replace(old, new, 1))
               print('Patched', f)
 
-          # Feature 1: Kaki branding.
-          # Preserve package ID, auth callbacks and server connection.
+          # FEATURE 1: KAKI BRANDING
+          # Preserve package ID, authentication, and server connection.
+
           edit(
               'android/app/build.gradle',
               'resValue "string", "app_name", "Immich"',
@@ -74,7 +81,10 @@ jobs:
 
           manifest = ROOT / 'android/app/src/main/AndroidManifest.xml'
           ms = manifest.read_text()
-          assert 'android:label="Upload to Immich"' in ms
+
+          if 'android:label="Upload to Immich"' not in ms:
+              raise SystemExit('Expected Android sharing label not found')
+
           ms = ms.replace(
               'android:label="Upload to Immich"',
               'android:label="Upload to Kaki"',
@@ -86,20 +96,29 @@ jobs:
 
           vector = '''<?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
-            android:width="108dp" android:height="108dp"
-            android:viewportWidth="108" android:viewportHeight="108">
-            <path android:fillColor="#FFF6EA"
+            android:width="108dp"
+            android:height="108dp"
+            android:viewportWidth="108"
+            android:viewportHeight="108">
+            <path
+              android:fillColor="#FFF6EA"
               android:pathData="M30,26 L42,26 L42,49 L64,26 L79,26 L55,52 L81,82 L65,82 L42,56 L42,82 L30,82 Z"/>
-            <path android:fillColor="#F5BE68"
+            <path
+              android:fillColor="#F5BE68"
               android:pathData="M80,30 a7,7 0,1 0,0.1 0 Z"/>
           </vector>
           '''
 
           drawable = ROOT / 'android/app/src/main/res/drawable'
+
           (drawable / 'ic_launcher_foreground.xml').write_text(vector)
+
           (drawable / 'ic_launcher_monochrome.xml').write_text(
-              vector.replace('#FFF6EA', '#FFFFFFFF')
-                    .replace('#F5BE68', '#FFFFFFFF')
+              vector.replace(
+                  '#FFF6EA', '#FFFFFFFF'
+              ).replace(
+                  '#F5BE68', '#FFFFFFFF'
+              )
           )
 
           edit(
@@ -111,35 +130,58 @@ jobs:
           def point_dist(x, y, ax, ay, bx, by):
               dx = bx - ax
               dy = by - ay
-              t = max(0, min(1, (
-                  (x - ax) * dx + (y - ay) * dy
-              ) / (dx * dx + dy * dy)))
-              return math.hypot(x - ax - t * dx, y - ay - t * dy)
+              t = max(
+                  0,
+                  min(
+                      1,
+                      ((x - ax) * dx + (y - ay) * dy)
+                      / (dx * dx + dy * dy)
+                  )
+              )
+              return math.hypot(
+                  x - ax - t * dx,
+                  y - ay - t * dy
+              )
 
           def png(size):
               data = bytearray()
+
               for yi in range(size):
                   data.append(0)
-                  y = (yi + .5) / size
+                  y = (yi + 0.5) / size
+
                   for xi in range(size):
-                      x = (xi + .5) / size
+                      x = (xi + 0.5) / size
+
                       k = (
                           (.27 <= x <= .38 and .20 <= y <= .80)
-                          or point_dist(x, y, .365, .52, .68, .22) < .066
-                          or point_dist(x, y, .365, .49, .70, .79) < .066
+                          or point_dist(
+                              x, y, .365, .52, .68, .22
+                          ) < .066
+                          or point_dist(
+                              x, y, .365, .49, .70, .79
+                          ) < .066
                       )
-                      circle = (x - .77)**2 + (y - .27)**2 < .065**2
+
+                      circle = (
+                          (x - .77)**2 + (y - .27)**2
+                          < .065**2
+                      )
+
                       data.extend(
-                          (255, 246, 234) if k else
-                          (245, 190, 104) if circle else
-                          (141, 62, 32)
+                          (255, 246, 234) if k
+                          else (245, 190, 104) if circle
+                          else (141, 62, 32)
                       )
 
               def chunk(kind, body):
                   return (
-                      struct.pack('>I', len(body)) + kind + body
+                      struct.pack('>I', len(body))
+                      + kind
+                      + body
                       + struct.pack(
-                          '>I', zlib.crc32(kind + body) & 0xffffffff
+                          '>I',
+                          zlib.crc32(kind + body) & 0xffffffff
                       )
                   )
 
@@ -147,9 +189,15 @@ jobs:
                   b'\x89PNG\r\n\x1a\n'
                   + chunk(
                       b'IHDR',
-                      struct.pack('>2I5B', size, size, 8, 2, 0, 0, 0)
+                      struct.pack(
+                          '>2I5B',
+                          size, size, 8, 2, 0, 0, 0
+                      )
                   )
-                  + chunk(b'IDAT', zlib.compress(data, 9))
+                  + chunk(
+                      b'IDAT',
+                      zlib.compress(data, 9)
+                  )
                   + chunk(b'IEND', b'')
               )
 
@@ -161,12 +209,14 @@ jobs:
               ('xxxhdpi', 192),
           ]:
               path = ROOT / (
-                  f'android/app/src/main/res/mipmap-{dpi}/ic_launcher.png'
+                  f'android/app/src/main/res/'
+                  f'mipmap-{dpi}/ic_launcher.png'
               )
               path.write_bytes(png(size))
 
-          # Feature 2: Smart Gallery Filters.
-          # Reuse Immich's existing server-side search.
+          # FEATURE 2: SMART GALLERY FILTERS
+          # Reuse existing Immich search functionality.
+
           search_file = 'lib/presentation/pages/search/search.page.dart'
 
           edit(
@@ -185,7 +235,9 @@ jobs:
 
               useEffect(() {
                 unawaited(
-                  kakiStorage.read(key: 'kaki.saved_filters.v1').then((value) {
+                  kakiStorage.read(
+                    key: 'kaki.saved_filters.v1'
+                  ).then((value) {
                     if (context.mounted && value != null) {
                       kakiPresets.value = value
                           .split('|')
@@ -215,6 +267,7 @@ jobs:
                 final after = thisMonth
                     ? DateTime(now.year, now.month)
                     : null;
+
                 final before = thisMonth
                     ? DateTime(now.year, now.month + 1)
                     : null;
@@ -256,13 +309,17 @@ jobs:
                 slivers: [
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                      padding: const EdgeInsets.fromLTRB(
+                        16, 10, 16, 6
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
                             'Kaki quick filters',
-                            style: TextStyle(fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                           const SizedBox(height: 8),
                           Wrap(
@@ -282,7 +339,8 @@ jobs:
                               ])
                                 ActionChip(
                                   label: Text(label),
-                                  onPressed: () => applyKakiFilter(label),
+                                  onPressed: () =>
+                                      applyKakiFilter(label),
                                 ),
                             ],
                           ),
@@ -296,26 +354,35 @@ jobs:
                                 onPressed: () async {
                                   final current = filter.value;
                                   final now = DateTime.now();
+
                                   final isThisMonth =
                                       current.date.takenAfter != null &&
-                                      current.date.takenAfter!.year == now.year &&
-                                      current.date.takenAfter!.month == now.month;
+                                      current.date.takenAfter!.year ==
+                                          now.year &&
+                                      current.date.takenAfter!.month ==
+                                          now.month;
 
                                   final name = isThisMonth
-                                      ? (current.mediaType == AssetType.image
+                                      ? (current.mediaType ==
+                                              AssetType.image
                                           ? 'This Month Photos'
                                           : 'This Month')
                                       : current.display.isFavorite
-                                          ? (current.mediaType == AssetType.video
+                                          ? (current.mediaType ==
+                                                  AssetType.video
                                               ? 'Favorite Videos'
-                                              : current.mediaType == AssetType.image
+                                              : current.mediaType ==
+                                                      AssetType.image
                                                   ? 'Favorite Photos'
                                                   : 'Favorites')
-                                          : current.mediaType == AssetType.video
+                                          : current.mediaType ==
+                                                  AssetType.video
                                               ? 'Videos'
-                                              : current.mediaType == AssetType.image
+                                              : current.mediaType ==
+                                                      AssetType.image
                                                   ? 'Photos'
-                                                  : current.filename == 'Screenshot'
+                                                  : current.filename ==
+                                                          'Screenshot'
                                                       ? 'Screenshots (filename)'
                                                       : '';
 
@@ -350,10 +417,12 @@ jobs:
                               for (final saved in kakiPresets.value)
                                 InputChip(
                                   label: Text(saved),
-                                  onPressed: () => applyKakiFilter(saved),
+                                  onPressed: () =>
+                                      applyKakiFilter(saved),
                                   onDeleted: () async {
-                                    final items = [...kakiPresets.value]
-                                      ..remove(saved);
+                                    final items = [
+                                      ...kakiPresets.value
+                                    ]..remove(saved);
 
                                     await kakiStorage.write(
                                       key: 'kaki.saved_filters.v1',
@@ -372,8 +441,9 @@ jobs:
                   SliverPadding(''',
           )
 
-          # Feature 3: Backup Health Dashboard.
-          # Display real state; keep upload logic unchanged.
+          # FEATURE 3: BACKUP HEALTH DASHBOARD
+          # Read existing backup state without modifying upload engine.
+
           upload_file = 'lib/pages/backup/upload_detail.page.dart'
 
           edit(
@@ -388,7 +458,9 @@ jobs:
               '    final uploadItems = ref.watch(backupProvider.select((state) => state.uploadItems));',
               '''    final backupState = ref.watch(backupProvider);
               final uploadItems = ref.watch(
-                backupProvider.select((state) => state.uploadItems)
+                backupProvider.select(
+                  (state) => state.uploadItems
+                )
               );''',
           )
 
@@ -398,7 +470,9 @@ jobs:
               '''      body: Column(
                 children: [
                   Card(
-                    margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    margin: const EdgeInsets.fromLTRB(
+                      16, 8, 16, 4
+                    ),
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Column(
@@ -416,10 +490,18 @@ jobs:
                             spacing: 14,
                             runSpacing: 8,
                             children: [
-                              Text('Backed up: ${backupState.backupCount}'),
-                              Text('Remaining: ${backupState.remainderCount}'),
-                              Text('Uploading: ${uploadingItems.length}'),
-                              Text('Failed: ${failedItems.length}'),
+                              Text(
+                                'Backed up: ${backupState.backupCount}'
+                              ),
+                              Text(
+                                'Remaining: ${backupState.remainderCount}'
+                              ),
+                              Text(
+                                'Uploading: ${uploadingItems.length}'
+                              ),
+                              Text(
+                                'Failed: ${failedItems.length}'
+                              ),
                             ],
                           ),
                           const SizedBox(height: 6),
@@ -432,7 +514,8 @@ jobs:
                             alignment: Alignment.centerRight,
                             child: TextButton.icon(
                               onPressed: () async {
-                                final user = ref.read(currentUserProvider);
+                                final user =
+                                    ref.read(currentUserProvider);
                                 if (user != null) {
                                   await ref
                                       .read(backupProvider.notifier)
@@ -444,8 +527,8 @@ jobs:
                             ),
                           ),
                           const Text(
-                            'For failed uploads, return to Backup and '
-                            'use the existing backup controls.',
+                            'For failed uploads, return to Backup '
+                            'and use the existing backup controls.',
                             style: TextStyle(fontSize: 12),
                           ),
                         ],
