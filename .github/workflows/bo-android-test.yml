@@ -1,1 +1,52 @@
 
+
+name: BO Immich Android test APK
+
+on:
+  push:
+    branches: [bo-immich-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install native code prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libclang-dev libssl-dev protobuf-compiler
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install mise and project toolchains
+        uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - name: Install mobile dependencies and generate code
+        run: |
+          mise run //mobile:install:ci
+          mise run //mobile:codegen
+
+      - name: Build installable test APK
+        working-directory: mobile
+        run: flutter build apk --debug --target-platform android-arm64
+
+      - name: Upload test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bo-immich-android-debug
+          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
