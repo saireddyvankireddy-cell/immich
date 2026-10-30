@@ -1,10 +1,10 @@
 
-
 name: BO Immich Android test APK
 
 on:
   push:
-    branches: [bo-immich-test]
+    branches:
+      - bo-immich-test
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
@@ -25,7 +26,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake ninja-build pkg-config libclang-dev libssl-dev protobuf-compiler
 
-            - name: Configure Android SDK
+      - name: Configure Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: ''
