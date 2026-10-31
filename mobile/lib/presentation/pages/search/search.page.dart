@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
@@ -8,12 +10,15 @@ import 'package:immich_mobile/constants/enums.dart';
 import 'package:immich_mobile/data/store.dart';
 import 'package:immich_mobile/domain/models/asset/base_asset.model.dart';
 import 'package:immich_mobile/domain/models/person.model.dart';
+import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/domain/models/tag.model.dart';
 import 'package:immich_mobile/domain/models/timeline.model.dart';
 import 'package:immich_mobile/domain/services/timeline.service.dart';
+import 'package:immich_mobile/entities/store.entity.dart' as legacy;
 import 'package:immich_mobile/extensions/build_context_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/models/search/search_filter.model.dart';
+import 'package:immich_mobile/presentation/pages/search/kaki_gallery_filters.dart';
 import 'package:immich_mobile/presentation/pages/search/paginated_search.provider.dart';
 import 'package:immich_mobile/presentation/widgets/bottom_sheet/general_bottom_sheet.widget.dart';
 import 'package:immich_mobile/presentation/widgets/search/quick_date_picker.dart';
@@ -21,6 +26,7 @@ import 'package:immich_mobile/presentation/widgets/timeline/timeline.widget.dart
 import 'package:immich_mobile/providers/infrastructure/timeline.provider.dart';
 import 'package:immich_mobile/providers/search/search_input_focus.provider.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
+import 'package:immich_mobile/repositories/secure_storage.repository.dart';
 import 'package:immich_mobile/routing/router.dart';
 import 'package:immich_mobile/widgets/common/feature_check.dart';
 import 'package:immich_mobile/widgets/common/search_field.dart';
@@ -53,19 +59,45 @@ class SearchPage extends HookConsumerWidget {
       TextSearchType.ocr => context.t.search_by_ocr_example,
     };
     final textSearchController = useTextEditingController();
-    final filter = useState<SearchFilter>(
-      SearchFilter(
-        people: {},
-        location: const SearchLocationFilter(),
-        camera: const SearchCameraFilter(),
-        date: const SearchDateFilter(),
-        display: const SearchDisplayFilters(isNotInAlbum: false, isArchive: false, isFavorite: false),
-        rating: const SearchRatingFilter(),
-        mediaType: AssetType.other,
-        language: "${context.locale.languageCode}-${context.locale.countryCode}",
-        tags: {},
-      ),
+    final baseFilter = SearchFilter(
+      people: {},
+      location: const SearchLocationFilter(),
+      camera: const SearchCameraFilter(),
+      date: const SearchDateFilter(),
+      display: const SearchDisplayFilters(isNotInAlbum: false, isArchive: false, isFavorite: false),
+      rating: const SearchRatingFilter(),
+      mediaType: AssetType.other,
+      language: "${context.locale.languageCode}-${context.locale.countryCode}",
+      tags: {},
     );
+    final filter = useState<SearchFilter>(baseFilter);
+    final gallerySelection = useState(const KakiGallerySelection());
+    final savedPresets = useState(<String, KakiGallerySelection>{});
+    final showGalleryResults = useState(false);
+    final userId = legacy.Store.tryGet(StoreKey.currentUser)?.id;
+    final presetKey = userId == null ? null : 'kaki_gallery_presets_$userId';
+    final presetStorage = ref.read(secureStorageRepositoryProvider);
+    useEffect(() {
+      if (presetKey == null) {
+        return null;
+      }
+      var active = true;
+      unawaited(() async {
+        try {
+          final raw = await presetStorage.read(presetKey);
+          if (raw == null || !active) {
+            return;
+          }
+          final decoded = jsonDecode(raw) as Map<String, dynamic>;
+          savedPresets.value = decoded.map(
+            (name, value) => MapEntry(name, KakiGallerySelection.decode(value as String)),
+          );
+        } catch (_) {
+          // A corrupt local preset must not stop normal search.
+        }
+      }());
+      return () => active = false;
+    }, [presetKey]);
 
     final dateInputFilter = useState<DateFilterInputModel?>(null);
 
@@ -80,17 +112,65 @@ class SearchPage extends HookConsumerWidget {
 
     final userPreferences = ref.watch(Store.userMetadata.preferences()).valueOrNull;
 
-    void search(SearchFilter f) {
-      if (f == filter.value) {
+    void search(SearchFilter f, {bool showAll = false}) {
+      if (f == filter.value && (!showAll || showGalleryResults.value)) {
         return;
       }
 
       filter.value = f;
+      showGalleryResults.value = showAll || !f.isEmpty;
 
       ref.read(paginatedSearchProvider.notifier).clear();
 
-      if (!f.isEmpty) {
+      if (showGalleryResults.value) {
         unawaited(ref.read(paginatedSearchProvider.notifier).search(f));
+      }
+    }
+
+    void applyGallerySelection(KakiGallerySelection selection) {
+      gallerySelection.value = selection;
+      textSearchController.clear();
+      search(selection.apply(baseFilter, DateTime.now()), showAll: true);
+    }
+
+    Future<void> saveGalleryPreset() async {
+      if (presetKey == null) {
+        return;
+      }
+      final controller = TextEditingController();
+      final name = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Save gallery filter'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 40,
+            decoration: const InputDecoration(labelText: 'Preset name'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+      controller.dispose();
+      if (name == null || name.isEmpty) {
+        return;
+      }
+      final updated = {...savedPresets.value, name: gallerySelection.value};
+      try {
+        await presetStorage.write(presetKey, jsonEncode(updated.map((key, value) => MapEntry(key, value.encode()))));
+        savedPresets.value = updated;
+      } catch (_) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Could not save this preset on this device')));
+        }
       }
     }
 
@@ -712,7 +792,99 @@ class SearchPage extends HookConsumerWidget {
               ),
             ),
           ),
-          if (filter.value.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Smart Gallery Filters'),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final entry in <(String, KakiGallerySelection)>[
+                          ('All', const KakiGallerySelection()),
+                          ('Favorites', const KakiGallerySelection(favorite: true)),
+                          ('Videos', const KakiGallerySelection(mediaType: AssetType.video)),
+                          ('Photos', const KakiGallerySelection(mediaType: AssetType.image)),
+                          ('Favorite Videos', const KakiGallerySelection(favorite: true, mediaType: AssetType.video)),
+                          ('Favorite Photos', const KakiGallerySelection(favorite: true, mediaType: AssetType.image)),
+                          ('This Month', const KakiGallerySelection(thisMonth: true)),
+                          (
+                            'This Month Photos',
+                            const KakiGallerySelection(thisMonth: true, mediaType: AssetType.image),
+                          ),
+                          ('Screenshots', const KakiGallerySelection(screenshots: true)),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ActionChip(label: Text(entry.$1), onPressed: () => applyGallerySelection(entry.$2)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      FilterChip(
+                        label: const Text('Favorite'),
+                        selected: gallerySelection.value.favorite,
+                        onSelected: (v) => applyGallerySelection(gallerySelection.value.copyWith(favorite: v)),
+                      ),
+                      FilterChip(
+                        label: const Text('This month'),
+                        selected: gallerySelection.value.thisMonth,
+                        onSelected: (v) => applyGallerySelection(gallerySelection.value.copyWith(thisMonth: v)),
+                      ),
+                      FilterChip(
+                        label: const Text('Screenshots¹'),
+                        selected: gallerySelection.value.screenshots,
+                        onSelected: (v) => applyGallerySelection(gallerySelection.value.copyWith(screenshots: v)),
+                      ),
+                      DropdownButton<AssetType>(
+                        value: gallerySelection.value.mediaType,
+                        items: const [
+                          DropdownMenuItem(value: AssetType.other, child: Text('All media')),
+                          DropdownMenuItem(value: AssetType.image, child: Text('Photos')),
+                          DropdownMenuItem(value: AssetType.video, child: Text('Videos')),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) {
+                            applyGallerySelection(gallerySelection.value.copyWith(mediaType: v));
+                          }
+                        },
+                      ),
+                      TextButton(onPressed: saveGalleryPreset, child: const Text('Save preset')),
+                      PopupMenuButton<String>(
+                        tooltip: 'Saved presets',
+                        onSelected: (name) {
+                          final selection = savedPresets.value[name];
+                          if (selection != null) {
+                            applyGallerySelection(selection);
+                          }
+                        },
+                        itemBuilder: (context) => savedPresets.value.keys
+                            .map((name) => PopupMenuItem(value: name, child: Text(name)))
+                            .toList(),
+                        child: const Padding(padding: EdgeInsets.all(8), child: Text('Presets ▾')),
+                      ),
+                      TextButton(
+                        onPressed: () => applyGallerySelection(const KakiGallerySelection()),
+                        child: const Text('Clear'),
+                      ),
+                    ],
+                  ),
+                  const Text(
+                    '¹ Screenshots searches filenames containing “Screenshot”; other naming schemes may not match.',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (!showGalleryResults.value && filter.value.isEmpty)
             const _SearchSuggestions()
           else
             _SearchResultGrid(onScrollEnd: () => loadMoreSearchResults()),

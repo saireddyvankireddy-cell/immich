@@ -11,6 +11,7 @@ import 'package:immich_mobile/extensions/platform_extensions.dart';
 import 'package:immich_mobile/extensions/theme_extensions.dart';
 import 'package:immich_mobile/generated/translations.g.dart';
 import 'package:immich_mobile/presentation/widgets/backup/backup_toggle_button.widget.dart';
+import 'package:immich_mobile/presentation/widgets/backup/kaki_backup_health.widget.dart';
 import 'package:immich_mobile/providers/background_sync.provider.dart';
 import 'package:immich_mobile/providers/backup/backup.provider.dart';
 import 'package:immich_mobile/providers/backup/backup_album.provider.dart';
@@ -132,6 +133,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               children: [
                 const SizedBox(height: 8),
                 const _BackupAlbumSelectionCard(),
+                const KakiBackupHealthCard(),
                 if (selectedAlbum.isNotEmpty) ...[
                   const _TotalCard(),
                   const _BackupCard(),
